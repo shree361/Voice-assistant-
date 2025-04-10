@@ -6,6 +6,7 @@ import threading
 import queue
 import urllib.parse
 import requests
+import re
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -14,9 +15,9 @@ load_dotenv()
 # GUI
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLabel, QTextEdit, QComboBox, QWidget, 
-                            QScrollArea, QFrame, QLineEdit)
+                            QScrollArea, QFrame, QLineEdit, QTextBrowser, QAction, QToolBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
+from PyQt5.QtGui import QFont, QIcon, QColor, QPalette, QSyntaxHighlighter, QTextCharFormat
 
 # Audio
 import speech_recognition as sr
@@ -25,6 +26,51 @@ import pygame
 # LLM for conversation
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+
+
+class CodeHighlighter(QSyntaxHighlighter):
+    """Syntax highlighter for code blocks"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.highlighting_rules = []
+        
+        # Keyword format
+        keyword_format = QTextCharFormat()
+        keyword_format.setForeground(QColor("#569CD6"))
+        keyword_format.setFontWeight(QFont.Bold)
+        keywords = [
+            "\\bdef\\b", "\\bclass\\b", "\\bimport\\b", "\\bfrom\\b", "\\breturn\\b",
+            "\\bif\\b", "\\belif\\b", "\\belse\\b", "\\bwhile\\b", "\\bfor\\b", "\\bin\\b",
+            "\\btry\\b", "\\bexcept\\b", "\\bfinally\\b", "\\bwith\\b", "\\bas\\b", "\\bpass\\b",
+            "\\bcontinue\\b", "\\bbreak\\b", "\\braise\\b", "\\basync\\b", "\\bawait\\b"
+        ]
+        for pattern in keywords:
+            self.highlighting_rules.append((re.compile(pattern), keyword_format))
+        
+        # String format
+        string_format = QTextCharFormat()
+        string_format.setForeground(QColor("#CE9178"))
+        self.highlighting_rules.append((re.compile("\".*\""), string_format))
+        self.highlighting_rules.append((re.compile("'.*'"), string_format))
+        
+        # Number format
+        number_format = QTextCharFormat()
+        number_format.setForeground(QColor("#B5CEA8"))
+        self.highlighting_rules.append((re.compile("\\b[0-9]+\\b"), number_format))
+        
+        # Comment format
+        comment_format = QTextCharFormat()
+        comment_format.setForeground(QColor("#6A9955"))
+        comment_format.setFontItalic(True)
+        self.highlighting_rules.append((re.compile("#.*"), comment_format))
+    
+    def highlightBlock(self, text):
+        for pattern, format in self.highlighting_rules:
+            for match in pattern.finditer(text):
+                self.setFormat(match.start(), match.end() - match.start(), format)
+
 
 class SpeechRecognitionThread(QThread):
     """Thread for speech recognition"""
@@ -125,8 +171,6 @@ class ConversationalBot:
             print(f"Error generating response: {str(e)}")
             return "I'm having trouble connecting to my language model. Please try again later."
     
-    # Modify the generate_speech method in the ConversationalBot class:
-
     def generate_speech(self, text):
         """Convert text to speech and play it"""
         if not text or len(text) == 0:
@@ -196,11 +240,22 @@ class ConversationalBot:
             print(f"Error in speech generation: {str(e)}")
 
 
+
 class VoiceAssistantApp(QMainWindow):
     """Main application window"""
     
     def __init__(self):
         super().__init__()
+        
+        # Initialize state variables first
+        self.is_listening = False
+        self.dark_mode = False
+        
+        # Set default theme colors
+        self.user_bg_color = "#e1f5fe"  # Light blue
+        self.assistant_bg_color = "#f1f8e9"  # Light green
+        self.user_text_color = "#01579b"  # Dark blue
+        self.assistant_text_color = "#33691e"  # Dark green
         
         # Initialize the bot
         self.bot = ConversationalBot()
@@ -212,18 +267,24 @@ class VoiceAssistantApp(QMainWindow):
         
         # Setup UI
         self.init_ui()
-        
-        # State
-        self.is_listening = False
     
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Voice Assistant")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 900, 700)
         
         # Main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout(main_widget)
+        self.main_widget = QWidget()
+        main_layout = QVBoxLayout(self.main_widget)
+        
+        # Create toolbar
+        toolbar = QToolBar("Main Toolbar")
+        self.addToolBar(toolbar)
+        
+        # Add dark mode toggle to toolbar
+        self.dark_mode_action = QAction("Toggle Dark Mode", self)
+        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
+        toolbar.addAction(self.dark_mode_action)
         
         # Model selection
         model_layout = QHBoxLayout()
@@ -241,17 +302,17 @@ class VoiceAssistantApp(QMainWindow):
         main_layout.addWidget(self.status_label)
         
         # Conversation display (scrollable)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         self.conversation_widget = QWidget()
         self.conversation_layout = QVBoxLayout(self.conversation_widget)
         self.conversation_layout.setAlignment(Qt.AlignTop)
         self.conversation_layout.setSpacing(10)
         
-        scroll.setWidget(self.conversation_widget)
-        main_layout.addWidget(scroll)
+        self.scroll_area.setWidget(self.conversation_widget)
+        main_layout.addWidget(self.scroll_area)
         
         # Input area - Text input and voice buttons
         input_layout = QHBoxLayout()
@@ -281,10 +342,85 @@ class VoiceAssistantApp(QMainWindow):
         main_layout.addWidget(self.clear_button)
         
         # Set the main widget
-        self.setCentralWidget(main_widget)
+        self.setCentralWidget(self.main_widget)
+        
+        # Apply the light theme initially
+        self.apply_theme()
         
         # Welcome message
         self.add_assistant_message("Hello! I'm your voice assistant. Click 'Start Listening' and speak to me, or type a message.")
+    
+    def toggle_dark_mode(self):
+        """Toggle between dark and light mode"""
+        self.dark_mode = not self.dark_mode
+        self.apply_theme()
+    
+    def apply_theme(self):
+        """Apply the current theme to the application"""
+        app = QApplication.instance()
+        
+        if self.dark_mode:
+            # Dark mode
+            palette = QPalette()
+            palette.setColor(QPalette.Window, QColor(53, 53, 53))
+            palette.setColor(QPalette.WindowText, Qt.white)
+            palette.setColor(QPalette.Base, QColor(35, 35, 35))
+            palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+            palette.setColor(QPalette.ToolTipBase, QColor(25, 25, 25))
+            palette.setColor(QPalette.ToolTipText, Qt.white)
+            palette.setColor(QPalette.Text, Qt.white)
+            palette.setColor(QPalette.Button, QColor(53, 53, 53))
+            palette.setColor(QPalette.ButtonText, Qt.white)
+            palette.setColor(QPalette.BrightText, Qt.red)
+            palette.setColor(QPalette.Link, QColor(42, 130, 218))
+            palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+            palette.setColor(QPalette.HighlightedText, Qt.black)
+            
+            # Update conversation background colors
+            self.user_bg_color = "#2C4F6E"  # Darker blue
+            self.assistant_bg_color = "#2D432F"  # Darker green
+            self.user_text_color = "#FFFFFF"
+            self.assistant_text_color = "#FFFFFF"
+            
+            # Update the dark mode action text
+            self.dark_mode_action.setText("Switch to Light Mode")
+        else:
+            # Light mode
+            palette = QPalette()
+            
+            # Update conversation background colors
+            self.user_bg_color = "#e1f5fe"  # Light blue
+            self.assistant_bg_color = "#f1f8e9"  # Light green
+            self.user_text_color = "#01579b"  # Dark blue
+            self.assistant_text_color = "#33691e"  # Dark green
+            
+            # Update the dark mode action text
+            self.dark_mode_action.setText("Switch to Dark Mode")
+        
+        app.setPalette(palette)
+        
+        # Update existing messages in the conversation
+        for i in range(self.conversation_layout.count()):
+            item = self.conversation_layout.itemAt(i)
+            if item and item.widget():
+                widget = item.widget()
+                
+                # Check if it's a user or assistant message
+                if "You:" in widget.findChildren(QLabel)[0].text():
+                    widget.setStyleSheet(f"background-color: {self.user_bg_color}; border-radius: 10px;")
+                    widget.findChildren(QLabel)[0].setStyleSheet(f"font-weight: bold; color: {self.user_text_color}; background-color: transparent;")
+                    for label in widget.findChildren(QLabel)[1:]:
+                        label.setStyleSheet(f"color: {self.user_text_color}; background-color: transparent;")
+                    for browser in widget.findChildren(QTextBrowser):
+                        browser.setStyleSheet(f"color: {self.user_text_color}; background-color: transparent; border: none;")
+                        
+                elif "Assistant:" in widget.findChildren(QLabel)[0].text():
+                    widget.setStyleSheet(f"background-color: {self.assistant_bg_color}; border-radius: 10px;")
+                    widget.findChildren(QLabel)[0].setStyleSheet(f"font-weight: bold; color: {self.assistant_text_color}; background-color: transparent;")
+                    for label in widget.findChildren(QLabel)[1:]:
+                        label.setStyleSheet(f"color: {self.assistant_text_color}; background-color: transparent;")
+                    for browser in widget.findChildren(QTextBrowser):
+                        browser.setStyleSheet(f"color: {self.assistant_text_color}; background-color: transparent; border: none;")
     
     def toggle_listening(self):
         """Toggle the listening state"""
@@ -350,16 +486,16 @@ class VoiceAssistantApp(QMainWindow):
         """Add a user message to the conversation display"""
         message_frame = QFrame()
         message_frame.setFrameShape(QFrame.StyledPanel)
-        message_frame.setStyleSheet("background-color: #e1f5fe; border-radius: 10px;")
+        message_frame.setStyleSheet(f"background-color: {self.user_bg_color}; border-radius: 10px;")
         
         layout = QVBoxLayout(message_frame)
         
         label = QLabel("You:")
-        label.setStyleSheet("font-weight: bold; color: #01579b; background-color: transparent;")
+        label.setStyleSheet(f"font-weight: bold; color: {self.user_text_color}; background-color: transparent;")
         
         content = QLabel(text)
         content.setWordWrap(True)
-        content.setStyleSheet("background-color: transparent;")
+        content.setStyleSheet(f"color: {self.user_text_color}; background-color: transparent;")
         
         layout.addWidget(label)
         layout.addWidget(content)
@@ -370,22 +506,83 @@ class VoiceAssistantApp(QMainWindow):
         QTimer.singleShot(100, self.scroll_to_bottom)
     
     def add_assistant_message(self, text):
-        """Add an assistant message to the conversation display"""
+        """Add an assistant message to the conversation display with rich text support"""
         message_frame = QFrame()
         message_frame.setFrameShape(QFrame.StyledPanel)
-        message_frame.setStyleSheet("background-color: #f1f8e9; border-radius: 10px;")
+        message_frame.setStyleSheet(f"background-color: {self.assistant_bg_color}; border-radius: 10px;")
         
         layout = QVBoxLayout(message_frame)
         
         label = QLabel("Assistant:")
-        label.setStyleSheet("font-weight: bold; color: #33691e; background-color: transparent;")
-        
-        content = QLabel(text)
-        content.setWordWrap(True)
-        content.setStyleSheet("background-color: transparent;")
-        
+        label.setStyleSheet(f"font-weight: bold; color: {self.assistant_text_color}; background-color: transparent;")
         layout.addWidget(label)
-        layout.addWidget(content)
+        
+        # Check for code blocks with triple backticks
+        parts = re.split(r'(```(?:\w*\n)?[\s\S]*?```)', text)
+        
+        for part in parts:
+            if part.startswith('```') and part.endswith('```'):
+                # This is a code block
+                # Extract the language if specified
+                lang_match = re.match(r'```(\w*)\n', part)
+                code_content = part
+                
+                if lang_match:
+                    language = lang_match.group(1)
+                    # Remove the language specifier from the code
+                    code_content = part[len(f'```{language}\n'):-3].strip()
+                else:
+                    # No language specified, just remove the backticks
+                    code_content = part[3:-3].strip()
+                
+                # Create a text browser for code with syntax highlighting
+                code_browser = QTextBrowser()
+                code_browser.setPlainText(code_content)
+                code_browser.setStyleSheet(f"""
+                    background-color: {'#1E1E1E' if self.dark_mode else '#F5F5F5'};
+                    color: {'#FFFFFF' if self.dark_mode else '#000000'};
+                    border: 1px solid {'#555555' if self.dark_mode else '#CCCCCC'};
+                    border-radius: 5px;
+                    font-family: Consolas, 'Courier New', monospace;
+                    padding: 10px;
+                """)
+                
+                # Apply syntax highlighting
+                highlighter = CodeHighlighter(code_browser.document())
+                
+                layout.addWidget(code_browser)
+            else:
+                # Check for inline code with single backticks
+                inline_parts = re.split(r'(`[^`]+`)', part)
+                
+                if len(inline_parts) > 1:
+                    # Contains inline code
+                    rich_text = ""
+                    for inline_part in inline_parts:
+                        if inline_part.startswith('`') and inline_part.endswith('`'):
+                            # Inline code
+                            code = inline_part[1:-1]
+                            if self.dark_mode:
+                                rich_text += f'<span style="background-color: #2D2D2D; color: #E0E0E0; font-family: monospace; padding: 2px 4px; border-radius: 3px;">{code}</span>'
+                            else:
+                                rich_text += f'<span style="background-color: #F0F0F0; color: #333333; font-family: monospace; padding: 2px 4px; border-radius: 3px;">{code}</span>'
+                        else:
+                            # Regular text
+                            rich_text += inline_part
+                    
+                    # Create a rich text label
+                    rich_label = QLabel()
+                    rich_label.setTextFormat(Qt.RichText)
+                    rich_label.setText(rich_text)
+                    rich_label.setWordWrap(True)
+                    rich_label.setStyleSheet(f"color: {self.assistant_text_color}; background-color: transparent;")
+                    layout.addWidget(rich_label)
+                elif part.strip():
+                    # Regular text without inline code
+                    content = QLabel(part)
+                    content.setWordWrap(True)
+                    content.setStyleSheet(f"color: {self.assistant_text_color}; background-color: transparent;")
+                    layout.addWidget(content)
         
         self.conversation_layout.addWidget(message_frame)
         
@@ -394,14 +591,9 @@ class VoiceAssistantApp(QMainWindow):
     
     def scroll_to_bottom(self):
         """Scroll the conversation view to the bottom"""
-        # Find the QScrollArea's vertical scrollbar
-        scrollbar = None
-        parent = self.conversation_widget.parent()
-        if hasattr(parent, 'verticalScrollBar'):
-            scrollbar = parent.verticalScrollBar()
-        
-        if scrollbar:
-            scrollbar.setValue(scrollbar.maximum())
+        if self.scroll_area:
+            vsb = self.scroll_area.verticalScrollBar()
+            vsb.setValue(vsb.maximum())
     
     def update_status(self, text):
         """Update the status display"""
