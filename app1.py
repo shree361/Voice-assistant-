@@ -15,7 +15,7 @@ load_dotenv()
 # GUI
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLabel, QTextEdit, QComboBox, QWidget, 
-                            QScrollArea, QFrame, QLineEdit, QTextBrowser, QAction, QToolBar)
+                            QScrollArea, QFrame, QLineEdit, QTextBrowser, QAction, QToolBar, QProgressBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette, QSyntaxHighlighter, QTextCharFormat
 
@@ -72,15 +72,19 @@ class CodeHighlighter(QSyntaxHighlighter):
                 self.setFormat(match.start(), match.end() - match.start(), format)
 
 
+# Modify the SpeechRecognitionThread class to add a countdown signal
+
 class SpeechRecognitionThread(QThread):
     """Thread for speech recognition"""
     transcribed = pyqtSignal(str)
     status = pyqtSignal(str)
+    listening_progress = pyqtSignal(int)  # Added signal for countdown
     
     def __init__(self):
         super().__init__()
         self.recognizer = sr.Recognizer()
         self.running = False
+        self.max_listen_time = 10  # Max seconds to listen
         
     def run(self):
         self.running = True
@@ -92,8 +96,12 @@ class SpeechRecognitionThread(QThread):
                 with sr.Microphone() as source:
                     # Adjust for ambient noise
                     self.recognizer.adjust_for_ambient_noise(source)
+                    
+                    # Start the listening time indicator
+                    self.start_listening_indicator()
+                    
                     # Listen for the first phrase and extract it into audio data
-                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=self.max_listen_time)
                 
                 try:
                     # Use Google's speech recognition
@@ -110,10 +118,271 @@ class SpeechRecognitionThread(QThread):
                 self.status.emit(f"Error listening: {str(e)}")
                 time.sleep(2)  # Wait before trying again
     
+    def start_listening_indicator(self):
+        """Start a timer to show listening progress"""
+        self.listening_progress.emit(100)  # Start at 100%
+        
+        # Create a separate thread for the countdown
+        def countdown():
+            for remaining in range(self.max_listen_time, 0, -1):
+                if not self.running:
+                    break
+                # Calculate percentage remaining
+                percent = int((remaining / self.max_listen_time) * 100)
+                self.listening_progress.emit(percent)
+                time.sleep(1)
+            
+            # Reset to 0 when done
+            if self.running:
+                self.listening_progress.emit(0)
+        
+        # Start countdown in a separate thread to not block the recognition
+        countdown_thread = threading.Thread(target=countdown)
+        countdown_thread.daemon = True
+        countdown_thread.start()
+    
     def stop(self):
         self.running = False
         self.status.emit("Stopped listening")
 
+
+# Modify the ConversationalBot's generate_speech method to better handle long responses
+
+def generate_speech(self, text):
+    """Convert text to speech and play it"""
+    if not text or len(text) == 0:
+        return
+    
+    try:
+        # Check if this is a multi-line or lengthy response
+        lines = text.split('\n')
+        line_count = len(lines)
+        word_count = len(text.split())
+        
+        # Determine if this is a long response that should be summarized
+        is_long_response = line_count > 3 or word_count > 50
+        
+        if is_long_response:
+            # For long responses, only speak the first sentence or a summary
+            # Find the first sentence (ending with ., !, or ?)
+            import re
+            first_sentence_match = re.search(r'^(.*?[.!?])\s', text)
+            
+            if first_sentence_match:
+                text_to_speak = first_sentence_match.group(1).strip()
+                # Add a closing phrase to indicate there's more content
+                text_to_speak += " I've displayed the full response for you to read."
+            else:
+                # If we can't find a proper sentence, just take the first line
+                text_to_speak = lines[0].strip()
+                if len(text_to_speak) > 100:
+                    text_to_speak = text_to_speak[:100] + "... I've displayed the full response for you to read."
+                elif text_to_speak:
+                    text_to_speak += " I've displayed the full response for you to read."
+                else:
+                    text_to_speak = "I've displayed my response for you to read."
+        else:
+            # For short responses, speak the whole thing
+            text_to_speak = text
+            
+        # Break long text into chunks (Google TTS has a limit)
+        max_length = 200
+        chunks = [text_to_speak[i:i+max_length] for i in range(0, len(text_to_speak), max_length)]
+        
+        # Create a temporary file to store the audio
+        temp_files = []
+        
+        for i, chunk in enumerate(chunks):
+            # URL encode the text
+            encoded_text = urllib.parse.quote(chunk)
+            
+            # Use Google Translate TTS with speed parameter
+            url = f"https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&q={encoded_text}&tl=en&total=1&idx=0&textlen={len(chunk)}&speed=2.0"
+            
+            # Make the request
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                # Save to a temporary file
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
+                    temp_audio.write(response.content)
+                    temp_files.append(temp_audio.name)
+            else:
+                print(f"TTS service returned status code {response.status_code}")
+        
+        # Play audio files sequentially
+        for audio_file in temp_files:
+            pygame.mixer.music.load(audio_file)
+            pygame.mixer.music.play()
+            # Wait for playback to finish
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+            # Clean up
+            os.unlink(audio_file)
+            
+    except Exception as e:
+        print(f"Error in speech generation: {str(e)}")
+
+
+# Add a progress bar to VoiceAssistantApp class
+
+def init_ui(self):
+    """Initialize the user interface"""
+    self.setWindowTitle("Voice Assistant")
+    self.setGeometry(100, 100, 900, 700)
+    
+    # Main widget and layout
+    self.main_widget = QWidget()
+    main_layout = QVBoxLayout(self.main_widget)
+    
+    # Create toolbar
+    toolbar = QToolBar("Main Toolbar")
+    self.addToolBar(toolbar)
+    
+    # Add dark mode toggle to toolbar
+    self.dark_mode_action = QAction("Toggle Dark Mode", self)
+    self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
+    toolbar.addAction(self.dark_mode_action)
+    
+    # Model selection
+    model_layout = QHBoxLayout()
+    model_label = QLabel("LLM Model:")
+    self.model_combo = QComboBox()
+    self.model_combo.addItems(["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"])
+    model_layout.addWidget(model_label)
+    model_layout.addWidget(self.model_combo)
+    model_layout.addStretch()
+    main_layout.addLayout(model_layout)
+    
+    # Status and listening time display area
+    status_layout = QHBoxLayout()
+    
+    # Status display
+    self.status_label = QLabel("Ready")
+    self.status_label.setAlignment(Qt.AlignCenter)
+    status_layout.addWidget(self.status_label, 7)
+    
+    # Add listening progress bar
+    self.listening_progress = QProgressBar()
+    self.listening_progress.setRange(0, 100)
+    self.listening_progress.setValue(0)
+    self.listening_progress.setFormat("Listening: %p%")
+    self.listening_progress.setTextVisible(True)
+    self.listening_progress.setVisible(False)  # Hide initially
+    status_layout.addWidget(self.listening_progress, 3)
+    
+    main_layout.addLayout(status_layout)
+    
+    # Conversation display (scrollable)
+    self.scroll_area = QScrollArea()
+    self.scroll_area.setWidgetResizable(True)
+    self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    
+    self.conversation_widget = QWidget()
+    self.conversation_layout = QVBoxLayout(self.conversation_widget)
+    self.conversation_layout.setAlignment(Qt.AlignTop)
+    self.conversation_layout.setSpacing(10)
+    
+    self.scroll_area.setWidget(self.conversation_widget)
+    main_layout.addWidget(self.scroll_area)
+    
+    # Input area - Text input and voice buttons
+    input_layout = QHBoxLayout()
+    
+    # Text input
+    self.text_input = QLineEdit()
+    self.text_input.setPlaceholderText("Type your message here...")
+    self.text_input.returnPressed.connect(self.on_send_clicked)
+    
+    # Send button
+    self.send_button = QPushButton("Send")
+    self.send_button.clicked.connect(self.on_send_clicked)
+    
+    # Voice control buttons
+    self.listen_button = QPushButton("Start Listening")
+    self.listen_button.clicked.connect(self.toggle_listening)
+    
+    input_layout.addWidget(self.text_input, 6)
+    input_layout.addWidget(self.send_button, 1)
+    input_layout.addWidget(self.listen_button, 3)
+    
+    main_layout.addLayout(input_layout)
+    
+    # Clear conversation button
+    self.clear_button = QPushButton("Clear Conversation")
+    self.clear_button.clicked.connect(self.clear_conversation)
+    main_layout.addWidget(self.clear_button)
+    
+    # Set the main widget
+    self.setCentralWidget(self.main_widget)
+    
+    # Apply the light theme initially
+    self.apply_theme()
+    
+    # Welcome message
+    self.add_assistant_message("Hello! I'm your voice assistant. Click 'Start Listening' and speak to me, or type a message.")
+
+
+# Update the VoiceAssistantApp's __init__ to connect the new signal
+
+def __init__(self):
+    super().__init__()
+    
+    # Initialize state variables first
+    self.is_listening = False
+    self.dark_mode = False
+    
+    # Set default theme colors
+    self.user_bg_color = "#e1f5fe"  # Light blue
+    self.assistant_bg_color = "#f1f8e9"  # Light green
+    self.user_text_color = "#01579b"  # Dark blue
+    self.assistant_text_color = "#33691e"  # Dark green
+    
+    # Initialize the bot
+    self.bot = ConversationalBot()
+    
+    # Initialize the speech recognition thread
+    self.speech_thread = SpeechRecognitionThread()
+    self.speech_thread.transcribed.connect(self.on_transcription)
+    self.speech_thread.status.connect(self.update_status)
+    self.speech_thread.listening_progress.connect(self.update_listening_progress)
+    
+    # Setup UI
+    self.init_ui()
+
+
+# Add the update_listening_progress method to VoiceAssistantApp
+
+def update_listening_progress(self, percent):
+    """Update the listening progress bar"""
+    if percent > 0:
+        # Show and update the progress bar
+        self.listening_progress.setVisible(True)
+        self.listening_progress.setValue(percent)
+    else:
+        # Hide the progress bar when not listening
+        self.listening_progress.setVisible(False)
+
+
+# Update toggle_listening method to handle the progress bar
+
+def toggle_listening(self):
+    """Toggle the listening state"""
+    if not self.is_listening:
+        # Start listening
+        self.is_listening = True
+        self.listen_button.setText("Stop Listening")
+        self.speech_thread.start()
+        # Show the progress bar
+        self.listening_progress.setVisible(True)
+    else:
+        # Stop listening
+        self.is_listening = False
+        self.listen_button.setText("Start Listening")
+        self.speech_thread.stop()
+        self.speech_thread.wait()  # Wait for the thread to finish
+        # Hide the progress bar
+        self.listening_progress.setVisible(False)
 
 class ConversationalBot:
     """Core logic for the conversational assistant"""
