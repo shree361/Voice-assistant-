@@ -23,7 +23,7 @@ from PyQt5.QtGui import QFont, QIcon, QColor, QPalette, QSyntaxHighlighter, QTex
 import speech_recognition as sr
 import pygame
 
-# LLM for conversation
+# LLM
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
@@ -119,13 +119,13 @@ class ConversationalBot:
     """Core logic for the conversational assistant"""
     
     def __init__(self, groq_api_key=None, model_name="llama3-70b-8192"):
-        # Initialize Groq LLM
+        
         self.llm = ChatGroq(
             groq_api_key=groq_api_key or os.getenv("GROQ_API_KEY") or "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",
             model_name=model_name
         )
         
-        # Initialize conversation history with system message for concise responses
+        # Conversation history with system message for concise responses
         self.system_message = SystemMessage(content=(
             "You are a helpful assistant that provides direct, concise answers without unnecessary text. "
             "Keep responses brief, straightforward, and to the point. "
@@ -135,7 +135,7 @@ class ConversationalBot:
         
         self.conversation_history = [self.system_message]
         
-        # Initialize pygame for audio playback
+        # Pygame for audio playback
         pygame.mixer.init()
     
     def process_input(self, text_input):
@@ -146,7 +146,7 @@ class ConversationalBot:
         # Add user message to conversation history
         self.conversation_history.append(HumanMessage(content=text_input))
         
-        # Get response from LLM
+        
         try:
             # Create the messages list from conversation history (limit to last 10 exchanges but always include system message)
             filtered_history = [self.system_message] + self.conversation_history[-10:]
@@ -205,17 +205,17 @@ class ConversationalBot:
             max_length = 200
             chunks = [text_to_speak[i:i+max_length] for i in range(0, len(text_to_speak), max_length)]
             
-            # Create a temporary file to store the audio
+            # Temporary file to store the audio
             temp_files = []
             
             for i, chunk in enumerate(chunks):
-                # URL encode the text
+              
                 encoded_text = urllib.parse.quote(chunk)
                 
-                # Use Google Translate TTS with speed parameter
+                # Google Translate TTS with speed parameter
                 url = f"https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&q={encoded_text}&tl=en&total=1&idx=0&textlen={len(chunk)}&speed=2.0"
                 
-                # Make the request
+                
                 response = requests.get(url)
                 
                 if response.status_code == 200:
@@ -341,10 +341,10 @@ class VoiceAssistantApp(QMainWindow):
         self.clear_button.clicked.connect(self.clear_conversation)
         main_layout.addWidget(self.clear_button)
         
-        # Set the main widget
+      
         self.setCentralWidget(self.main_widget)
         
-        # Apply the light theme initially
+        # Light theme initially
         self.apply_theme()
         
         # Welcome message
